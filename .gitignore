@@ -1,0 +1,5 @@
+data/
+backgrounds/
+isl_cnn_model.h5
+isl_cnn_model.keras
+isl_cnn_model_finetuned.keras
