@@ -4,11 +4,74 @@ import { Camera, Send, MessageCircle, Video, VideoOff, LogOut, User, Settings } 
 import { useAuth } from '../context/AuthContext';
 import Conversations from '../components/Conversations';
 
+// Simple spell checker implementation
+class SimpleSpellChecker {
+  constructor() {
+    // Common English words for basic spell checking
+    this.dictionary = new Set([
+      'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the', 'to', 'was', 'will', 'with',
+      'hello', 'world', 'good', 'morning', 'afternoon', 'evening', 'night', 'day', 'week', 'month', 'year', 'time', 'work', 'play', 'eat', 'drink', 'sleep', 'walk', 'run', 'talk', 'listen', 'see', 'hear', 'feel', 'think', 'know', 'want', 'need', 'like', 'love', 'hate', 'help', 'please', 'thank', 'sorry', 'yes', 'no', 'maybe', 'okay', 'fine', 'great', 'bad', 'good', 'big', 'small', 'hot', 'cold', 'new', 'old', 'young', 'fast', 'slow', 'high', 'low', 'up', 'down', 'left', 'right', 'front', 'back', 'inside', 'outside', 'here', 'there', 'now', 'then', 'today', 'tomorrow', 'yesterday', 'this', 'that', 'these', 'those', 'my', 'your', 'his', 'her', 'their', 'our', 'we', 'you', 'they', 'me', 'him', 'us', 'them', 'i', 'am', 'do', 'can', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall', 'have', 'had', 'has', 'been', 'being', 'get', 'got', 'getting', 'go', 'went', 'going', 'gone', 'come', 'came', 'coming', 'make', 'made', 'making', 'take', 'took', 'taking', 'taken', 'give', 'gave', 'giving', 'given', 'say', 'said', 'saying', 'tell', 'told', 'telling', 'see', 'saw', 'seeing', 'seen', 'look', 'looked', 'looking', 'find', 'found', 'finding', 'think', 'thought', 'thinking', 'know', 'knew', 'knowing', 'known', 'feel', 'felt', 'feeling', 'want', 'wanted', 'wanting', 'need', 'needed', 'needing', 'like', 'liked', 'liking', 'love', 'loved', 'loving', 'help', 'helped', 'helping', 'please', 'pleased', 'pleasing', 'thank', 'thanked', 'thanking', 'sorry', 'excuse', 'pardon', 'forgive', 'forgave', 'forgiving', 'forgiven'
+    ]);
+  }
+
+  correction(word) {
+    if (!word) return word;
+    word = word.toLowerCase();
+    
+    // If word is in dictionary, return as is
+    if (this.dictionary.has(word)) {
+      return word;
+    }
+    
+    // Simple correction logic - find closest word
+    let bestMatch = word;
+    let bestScore = 0;
+    
+    for (const dictWord of this.dictionary) {
+      const score = this.levenshteinDistance(word, dictWord);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = dictWord;
+      }
+    }
+    
+    // Only correct if similarity is high enough
+    const maxLength = Math.max(word.length, bestMatch.length);
+    const similarity = (maxLength - this.levenshteinDistance(word, bestMatch)) / maxLength;
+    
+    return similarity > 0.7 ? bestMatch : word;
+  }
+
+  levenshteinDistance(str1, str2) {
+    const matrix = [];
+    for (let i = 0; i <= str2.length; i++) {
+      matrix[i] = [i];
+    }
+    for (let j = 0; j <= str1.length; j++) {
+      matrix[0][j] = j;
+    }
+    for (let i = 1; i <= str2.length; i++) {
+      for (let j = 1; j <= str1.length; j++) {
+        if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1,
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1
+          );
+        }
+      }
+    }
+    return matrix[str2.length][str1.length];
+  }
+}
+
 export default function CameraChatApp() {
   const { user, token, logout } = useAuth();
   const navigate = useNavigate();
   const [messages, setMessages] = useState([
-    { id: Date.now() + Math.random(), text: "Welcome to the ISL chat! Show hand signs to start communicating.", sender: 'system', timestamp: new Date() }
+    { id: Date.now() + Math.random(), text: "Welcome! Start the camera and begin signing.", sender: 'system', timestamp: new Date() }
   ]);
   const [inputMessage, setInputMessage] = useState('');
   const [isCameraOn, setIsCameraOn] = useState(false);
@@ -23,6 +86,16 @@ export default function CameraChatApp() {
   const streamRef = useRef(null);
   const messagesEndRef = useRef(null);
   const predictionIntervalRef = useRef(null);
+  const spellChecker = useRef(new SimpleSpellChecker());
+
+  // New state for word buffer and autocorrect
+  const [wordBuffer, setWordBuffer] = useState('');
+  const [predictionBuffer, setPredictionBuffer] = useState([]);
+  const [lastPredictionTime, setLastPredictionTime] = useState(0);
+  const [noHandStartTime, setNoHandStartTime] = useState(null);
+  const [currentWord, setCurrentWord] = useState('');
+  const [sentenceBuffer, setSentenceBuffer] = useState('');
+  const [wordStartTime, setWordStartTime] = useState(null);
 
   const handleLogout = () => {
     logout();
@@ -59,6 +132,109 @@ export default function CameraChatApp() {
     setIsCameraOn(false);
   };
 
+  const addToPredictionBuffer = (prediction) => {
+    console.log('Adding to prediction buffer:', prediction);
+    setPredictionBuffer(prev => {
+      const newBuffer = [...prev, prediction];
+      console.log('Updated prediction buffer:', newBuffer);
+      if (newBuffer.length > 7) {
+        return newBuffer.slice(-7);
+      }
+      return newBuffer;
+    });
+  };
+
+  const getMostCommonPrediction = () => {
+    console.log('Getting most common prediction. Buffer:', predictionBuffer, 'Length:', predictionBuffer.length);
+    if (predictionBuffer.length === 0) {
+      console.log('Buffer is empty, returning null');
+      return null;
+    }
+    
+    const counts = {};
+    predictionBuffer.forEach(pred => {
+      counts[pred] = (counts[pred] || 0) + 1;
+    });
+    
+    let mostCommon = predictionBuffer[0];
+    let maxCount = 1;
+    
+    for (const [pred, count] of Object.entries(counts)) {
+      if (count > maxCount) {
+        maxCount = count;
+        mostCommon = pred;
+      }
+    }
+    
+    console.log('Prediction counts:', counts, 'Most common:', mostCommon, 'Max count:', maxCount);
+    return mostCommon;
+  };
+
+  const autocorrectWord = (word) => {
+    if (!word) return word;
+    return spellChecker.current.correction(word);
+  };
+
+  const completeWord = async (word) => {
+    if (!word) return;
+    
+    console.log('Completing word:', word);
+    const correctedWord = autocorrectWord(word);
+    console.log('Corrected word:', correctedWord);
+    
+    setSentenceBuffer(prev => prev + correctedWord + ' ');
+    setCurrentWord('');
+    setPredictionBuffer([]);
+    setWordStartTime(null);
+    
+    // Send completed word to backend
+    try {
+      console.log('Sending word to backend:', correctedWord);
+      const response = await fetch('http://localhost:3000/api/words', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          word: correctedWord,
+          sentence: sentenceBuffer + correctedWord,
+          confidence: predictionConfidence
+        })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Word stored successfully:', result);
+      } else {
+        const errorData = await response.json();
+        console.error('Failed to store word:', errorData);
+      }
+    } catch (error) {
+      console.error('Error storing word:', error);
+    }
+    
+    // Add the corrected word to chat
+    const newMessage = {
+      id: Date.now() + Math.random(),
+      text: `Word: ${correctedWord}`,
+      sender: 'system',
+      timestamp: new Date()
+    };
+    console.log('Adding completed word message to chat:', newMessage);
+    setMessages(prev => {
+      const updatedMessages = [...prev, newMessage];
+      console.log('Updated messages (completed word):', updatedMessages);
+      return updatedMessages;
+    });
+  };
+
+  const completeCurrentWord = async () => {
+    if (currentWord) {
+      await completeWord(currentWord);
+    }
+  };
+
   const captureAndPredict = async () => {
     if (!videoRef.current || !token) return;
     
@@ -83,23 +259,85 @@ export default function CameraChatApp() {
       
       const result = await response.json();
       
+      console.log('Prediction result:', result);
+      
       if (result.hand_detected && result.gesture) {
         setCurrentGesture(result.gesture);
         setPredictionConfidence(result.confidence);
         
-        // Add to messages if confidence is high enough
+        console.log('Hand detected, gesture:', result.gesture, 'confidence:', result.confidence);
+        
+        // Only process high-confidence predictions (>70%)
         if (result.confidence > 0.7) {
-          const newMessage = {
-            id: Date.now() + Math.random(),
-            text: `Detected: ${result.gesture} (${(result.confidence * 100).toFixed(1)}%)`,
-            sender: 'system',
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, newMessage]);
+          addToPredictionBuffer(result.gesture);
+          
+          const currentTime = Date.now();
+          const timeSinceLastPrediction = currentTime - lastPredictionTime;
+          
+          // Add letter to word buffer if prediction is stable (not the same as last letter)
+          const smoothedPrediction = getMostCommonPrediction();
+          console.log('Smoothed prediction:', smoothedPrediction, 'Current word:', currentWord, 'Last letter:', currentWord.slice(-1), 'Buffer length:', predictionBuffer.length);
+          
+          // Fallback: use the latest prediction if smoothed prediction is null
+          const predictionToUse = smoothedPrediction || result.gesture;
+          console.log('Prediction to use:', predictionToUse);
+          
+          if (predictionToUse && predictionToUse !== currentWord.slice(-1)) {
+            console.log('Adding letter to word:', predictionToUse, 'Current word:', currentWord);
+            setCurrentWord(prev => {
+              const newWord = prev + predictionToUse;
+              console.log('New word after adding letter:', newWord);
+              // Start word timer if this is the first letter
+              if (prev === '') {
+                setWordStartTime(currentTime);
+                console.log('Started word timer');
+              }
+              return newWord;
+            });
+            setLastPredictionTime(currentTime);
+          } else if (predictionToUse && predictionToUse === currentWord.slice(-1)) {
+            console.log('Same prediction as last letter, not adding:', predictionToUse);
+          } else {
+            console.log('No valid prediction to add. Prediction:', predictionToUse, 'Current word:', currentWord);
+          }
+          
+          setNoHandStartTime(null); // Reset no-hand timer
         }
       } else {
         setCurrentGesture(null);
         setPredictionConfidence(0);
+        
+        // No hand detected - start timer for space addition
+        if (noHandStartTime === null) {
+          setNoHandStartTime(Date.now());
+        } else {
+          // Check if hand has been out of view for more than 0.5 seconds
+          const timeSinceNoHand = Date.now() - noHandStartTime;
+          if (timeSinceNoHand > 500 && currentWord) {
+            // Complete the current word when hands are out of view
+            await completeWord(currentWord);
+            setNoHandStartTime(null);
+          }
+        }
+        
+        // Also complete word if it's getting too long (more than 5 letters) or has been in progress too long
+        const shouldCompleteWord = currentWord && (
+          currentWord.length >= 5 || 
+          (wordStartTime && Date.now() - wordStartTime > 3000) // 3 seconds timeout
+        );
+        
+        console.log('Word completion check:', {
+          currentWord,
+          wordLength: currentWord?.length,
+          wordStartTime,
+          timeSinceStart: wordStartTime ? Date.now() - wordStartTime : 'N/A',
+          shouldComplete: shouldCompleteWord
+        });
+        
+        if (shouldCompleteWord) {
+          console.log('Completing word:', currentWord, 'Length:', currentWord.length, 'Time since start:', wordStartTime ? Date.now() - wordStartTime : 'N/A');
+          await completeWord(currentWord);
+        }
       }
     } catch (error) {
       console.error('Prediction error:', error);
@@ -136,9 +374,25 @@ export default function CameraChatApp() {
   };
 
   const saveConversation = async () => {
-    if (!token || messages.length <= 1) return; // Don't save if only welcome message
+    // Don't save if no token
+    if (!token) return;
+    
+    // Check if there are any meaningful messages (not just welcome message)
+    const meaningfulMessages = messages.filter(msg => 
+      msg.sender === 'user' || 
+      (msg.sender === 'system' && msg.text.startsWith('Word:'))
+    );
+    
+    console.log('All messages:', messages);
+    console.log('Meaningful messages:', meaningfulMessages);
+    
+    if (meaningfulMessages.length === 0) {
+      console.log('No meaningful messages to save');
+      return;
+    }
 
     try {
+      console.log('Attempting to save conversation with title:', conversationTitle);
       const response = await fetch('http://localhost:3000/api/conversations', {
         method: 'POST',
         headers: {
@@ -153,10 +407,13 @@ export default function CameraChatApp() {
 
       if (response.ok) {
         const result = await response.json();
-        console.log('Conversation saved:', result);
+        console.log('Conversation saved successfully:', result);
         // Reset for new conversation
         setMessages([{ id: Date.now() + Math.random(), text: "New conversation started!", sender: 'system', timestamp: new Date() }]);
         setConversationTitle('New Conversation');
+      } else {
+        const errorData = await response.json();
+        console.error('Failed to save conversation:', errorData);
       }
     } catch (error) {
       console.error('Error saving conversation:', error);
@@ -174,6 +431,10 @@ export default function CameraChatApp() {
       setSelectedConversation(null);
     }
     setShowConversations(false);
+  };
+
+  const handleConversationsToggle = () => {
+    setShowConversations(!showConversations);
   };
 
   const handleKeyPress = (e) => {
@@ -229,6 +490,54 @@ export default function CameraChatApp() {
                       <div className="w-2 h-2 bg-green-400 rounded-full"></div>
                     )}
                     {currentGesture ? `${currentGesture} (${(predictionConfidence * 100).toFixed(1)}%)` : 'Ready'}
+                  </div>
+                )}
+                
+                {/* Word/Sentence Buffer Display */}
+                {isCameraOn && (currentWord || sentenceBuffer) && (
+                  <div className="flex flex-col gap-1 px-3 py-2 bg-blue-500/20 text-blue-300 rounded-lg text-sm">
+                    {currentWord && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-blue-200">Current:</span>
+                        <span className="font-mono">{currentWord}</span>
+                                      <button
+                onClick={completeCurrentWord}
+                className="px-2 py-1 bg-green-500/20 text-green-300 rounded text-xs hover:bg-green-500/30 transition-colors"
+              >
+                Complete
+              </button>
+              <button
+                onClick={() => {
+                  // Test: Add a test word and complete it
+                  setCurrentWord('HELLO');
+                  setTimeout(() => completeCurrentWord(), 100);
+                }}
+                className="px-2 py-1 bg-blue-500/20 text-blue-300 rounded text-xs hover:bg-blue-500/30 transition-colors"
+              >
+                Test Word
+              </button>
+              <button
+                onClick={() => {
+                  // Force complete current word
+                  if (currentWord) {
+                    console.log('Force completing word:', currentWord);
+                    completeCurrentWord();
+                  } else {
+                    console.log('No current word to complete');
+                  }
+                }}
+                className="px-2 py-1 bg-yellow-500/20 text-yellow-300 rounded text-xs hover:bg-yellow-500/30 transition-colors"
+              >
+                Force Complete
+              </button>
+                      </div>
+                    )}
+                    {sentenceBuffer && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-blue-200">Sentence:</span>
+                        <span className="font-mono">{sentenceBuffer}</span>
+                      </div>
+                    )}
                   </div>
                 )}
                 <button
@@ -305,7 +614,7 @@ export default function CameraChatApp() {
                 </div>
                 {/* Conversations Button */}
                 <button
-                  onClick={() => setShowConversations(!showConversations)}
+                  onClick={handleConversationsToggle}
                   className="p-2 bg-blue-500/20 text-blue-300 rounded-lg hover:bg-blue-500/30 transition-colors"
                 >
                   <MessageCircle className="w-4 h-4" />
@@ -330,10 +639,16 @@ export default function CameraChatApp() {
               />
               <button
                 onClick={saveConversation}
-                className="px-2 py-1 bg-purple-500/20 text-purple-300 rounded text-xs hover:bg-purple-500/30 transition-colors"
+                disabled={messages.filter(msg => msg.sender === 'user' || (msg.sender === 'system' && msg.text.startsWith('Word:'))).length === 0}
+                className={`px-2 py-1 rounded text-xs transition-colors ${
+                  messages.filter(msg => msg.sender === 'user' || (msg.sender === 'system' && msg.text.startsWith('Word:'))).length > 0
+                    ? 'bg-purple-500/20 text-purple-300 hover:bg-purple-500/30'
+                    : 'bg-gray-500/20 text-gray-400 cursor-not-allowed'
+                }`}
               >
                 Save
               </button>
+
             </div>
           </div>
 
@@ -394,6 +709,13 @@ export default function CameraChatApp() {
               onSelectConversation={loadConversation}
               selectedConversation={selectedConversation}
             />
+            {/* Close Button */}
+            <button
+              onClick={() => setShowConversations(false)}
+              className="absolute top-4 left-4 p-2 bg-red-500/20 text-red-300 rounded-lg hover:bg-red-500/30 transition-colors"
+            >
+              ✕
+            </button>
           </div>
         </div>
       )}

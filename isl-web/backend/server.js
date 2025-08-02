@@ -1,7 +1,7 @@
 import express from "express"
 import cors from "cors"
 import dotenv from "dotenv"
-import { MongoClient } from 'mongodb'
+import { MongoClient, ObjectId } from 'mongodb'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { predictGesture, checkISLHealth } from './isl-integration.js'
@@ -149,8 +149,8 @@ app.post('/api/predict', authenticateToken, async (req, res) => {
 
         const result = await predictGesture(image)
         
-        // Store prediction in database
-        if (result.hand_detected && result.gesture) {
+        // Only store high-confidence predictions (>70%)
+        if (result.hand_detected && result.gesture && result.confidence > 0.7) {
             await db.collection('predictions').insertOne({
                 userId: req.user.userId,
                 gesture: result.gesture,
@@ -163,6 +163,37 @@ app.post('/api/predict', authenticateToken, async (req, res) => {
         res.json(result)
     } catch (error) {
         console.error('Prediction error:', error)
+        res.status(500).json({ error: 'Internal server error' })
+    }
+})
+
+// Store completed words/sentences
+app.post('/api/words', authenticateToken, async (req, res) => {
+    try {
+        const { word, sentence, confidence } = req.body
+        
+        console.log('Received word storage request:', { word, sentence, confidence, userId: req.user.userId })
+        
+        if (!word) {
+            console.log('No word provided in request');
+            return res.status(400).json({ error: 'Word data required' })
+        }
+
+        const wordDoc = {
+            userId: req.user.userId,
+            word: word,
+            sentence: sentence || '',
+            confidence: confidence || 0,
+            timestamp: new Date()
+        }
+        
+        console.log('Storing word document:', wordDoc);
+        const result = await db.collection('words').insertOne(wordDoc)
+        console.log('Word stored with ID:', result.insertedId);
+
+        res.json({ message: 'Word stored successfully', wordId: result.insertedId })
+    } catch (error) {
+        console.error('Word storage error:', error)
         res.status(500).json({ error: 'Internal server error' })
     }
 })
@@ -188,6 +219,8 @@ app.post('/api/conversations', authenticateToken, async (req, res) => {
     try {
         const { messages, title } = req.body
         
+        console.log('Saving conversation:', { title, messageCount: messages?.length, userId: req.user.userId })
+        
         const conversation = {
             userId: req.user.userId,
             title: title || 'New Conversation',
@@ -196,7 +229,8 @@ app.post('/api/conversations', authenticateToken, async (req, res) => {
             updatedAt: new Date()
         }
         
-        await db.collection('conversations').insertOne(conversation)
+        const result = await db.collection('conversations').insertOne(conversation)
+        console.log('Conversation saved with ID:', result.insertedId)
         
         res.status(201).json({ 
             message: 'Conversation saved',
@@ -204,6 +238,27 @@ app.post('/api/conversations', authenticateToken, async (req, res) => {
         })
     } catch (error) {
         console.error('Error saving conversation:', error)
+        res.status(500).json({ error: 'Internal server error' })
+    }
+})
+
+// Delete conversation
+app.delete('/api/conversations/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params
+        
+        const result = await db.collection('conversations').deleteOne({
+            _id: new ObjectId(id),
+            userId: req.user.userId
+        })
+        
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'Conversation not found' })
+        }
+        
+        res.json({ message: 'Conversation deleted successfully' })
+    } catch (error) {
+        console.error('Error deleting conversation:', error)
         res.status(500).json({ error: 'Internal server error' })
     }
 })
