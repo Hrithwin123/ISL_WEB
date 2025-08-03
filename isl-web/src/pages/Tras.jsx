@@ -565,7 +565,7 @@ export default function CameraChatApp() {
               height="480"
               style={{ border: '', zIndex: 1, position: 'absolute', height: "85%" }}
               onLoadedMetadata={() => videoRef.current?.play()}
-              className="top-9 left-0"
+              className="top-9 left-0 rotate-y-180"
             />
           
             {!isCameraOn && (
